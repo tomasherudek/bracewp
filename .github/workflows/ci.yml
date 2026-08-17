@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  phpcs:
+    name: PHPCS (WPCS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+      - name: Run PHPCS
+        run: composer phpcs
+
+  phpstan:
+    name: PHPStan (level 6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+      - name: Run PHPStan
+        run: composer phpstan
+
+  unit:
+    # PRs run PHP 8.1 only; pushes to main run the full matrix.
+    name: Unit tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ github.event_name == 'push' && fromJSON('["8.1", "8.2", "8.3"]') || fromJSON('["8.1"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+      - name: Run unit tests
+        run: composer test
+
+  plugin-check:
+    # Covers the WP.org plugin checks including readme.txt validation.
+    name: WP Plugin Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+          tools: composer:v2
+      - name: Install runtime autoloader
+        run: composer install --no-dev --prefer-dist --no-progress
+      - name: Run Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './'
+
+  i18n:
+    name: i18n makepot check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+      - name: Download WP-CLI
+        run: curl -sSLo wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+      - name: Make POT (validates i18n usage)
+        run: php wp-cli.phar i18n make-pot . /tmp/brace.pot --slug=brace --exclude=vendor,tests,build

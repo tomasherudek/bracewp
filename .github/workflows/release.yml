@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+          tools: composer:v2
+
+      - name: Install runtime autoloader
+        run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
+
+      - name: Build distribution zip
+        run: |
+          mkdir -p build/brace
+          rsync -rc --exclude-from=.distignore ./ build/brace/
+          cd build
+          zip -rq "brace-${GITHUB_REF_NAME#v}.zip" brace
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/brace-*.zip
+          generate_release_notes: true

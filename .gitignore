@@ -1,0 +1,10 @@
+/vendor/
+/build/
+/node_modules/
+.phpunit.result.cache
+.phpcs.cache
+phpstan.neon
+phpcs.xml
+phpunit.xml
+wp-cli.phar
+.DS_Store

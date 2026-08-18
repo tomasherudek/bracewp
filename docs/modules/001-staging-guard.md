@@ -44,9 +44,31 @@ Check B is the one that does the real work, and it contains the trap:
 >
 > Storing `sha256( normalize( host ) )` closes it. A search-replace cannot match a hash, so the baseline survives the clone and the mismatch is detected. Brace ships a serialized-safe search-replace of its own, so this module has to survive that tool specifically.
 
-Host normalization before comparing or hashing: lowercase, strip a leading `www.`, strip the port, convert IDN to punycode. Without this, `WWW.Yourdomain.com` and `yourdomain.com` read as two different sites.
+Host normalization before comparing or hashing: lowercase, strip a leading `www.`, strip the port, convert IDN to punycode. Without this, `WWW.Yourdomain.com` and `yourdomain.com` read as two different sites. Stripping `www.` also keeps it out of the level rule below, where it would otherwise look like a subdomain.
 
-### 2.2 Failing in the right direction
+### 2.2 The level rule: a mismatch is not enough
+
+A bare mismatch is too eager. Applied alone it guards a live site the day it migrates to a new domain, which is the failure mode section 2.3 says we must not have. The domain's **level** decides how much a mismatch is worth.
+
+| Current host | Example | Verdict on mismatch |
+|---|---|---|
+| Registrable domain, no subdomain (the apex) | `eurodomain.com`, `eurodomain.cz`, `eurodomain.co.uk` | **Never guarded automatically.** An apex domain is somebody's real site until proven otherwise. |
+| Subdomain | `staging.eurodomain.com`, `client.agency.com` | **Guarded.** A subdomain that disagrees with the recorded production host is a copy. |
+| Not a public host at all | `localhost`, an IP literal, `.test`, `.local`, `.localhost` | **Always guarded**, mismatch or not. Nothing legitimate is in production there. |
+
+The full order of decisions:
+
+1. Normalize the host.
+2. Not a public host? **Staging.**
+3. Host equals the recorded baseline? **Production.**
+4. Host is an apex domain? **Production**, and show a notice that the site appears to have moved. Inform, do not act.
+5. Otherwise, a subdomain that does not match the baseline: **Staging.**
+
+Step 4 is the deliberate hole in the net: a copy parked on its own apex domain (`eurodomain-test.com`) is not detected. That is the price of never silencing a live site by accident, it is paid knowingly, and the module's own settings screen can still switch guards on by hand.
+
+**Implementation note, and this one has teeth.** "Is this an apex domain?" cannot be answered by counting dots. `eurodomain.co.uk` has three labels and is an apex; `staging.eurodomain.com` has three labels and is not. Telling them apart needs the public suffix list. Single-label suffixes need no data at all, since anything directly under `.com` or `.cz` is an apex by definition. Only multi-part suffixes (`co.uk`, `com.au`, `com.br`, `co.jp`) need a lookup table, so Brace ships a **curated list of multi-part public suffixes as a data file**, loaded only when this module boots. Data, not a runtime dependency, so the zero-dependency rule in ARCHITECTURE.md holds. The list needs a refresh once in a while, and a stale entry degrades to "treated as a subdomain", which guards rather than exposes. It fails to the safe side.
+
+### 2.3 Failing in the right direction
 
 Detection can be wrong in two directions, and they are not symmetrical.
 
@@ -54,15 +76,15 @@ A **false negative** (staging not detected) sends real email from a test site. L
 
 A **false positive** (production detected as staging) silently stops a live site from sending order confirmations and password resets. Nobody notices for days. This is worse, and it collides directly with design priority #1 in ARCHITECTURE.md: never break a site.
 
-A legitimate domain migration produces exactly this false positive. So:
+The level rule in section 2.2 is the main defence: the apex case, which is what a migrated production site looks like, is never guarded on its own. The rest:
 
-- Whenever guards are active, say so **loudly** (section 2.3). Silent guarding is forbidden.
+- Whenever guards are active, say so **loudly** (section 2.4). Silent guarding is forbidden.
 - Provide a one-click **"This is production"** action in the admin notice that re-records the baseline to the current host.
 - Provide the same as a WP-CLI command, for when the admin cannot send mail to let you log in.
 - Support additional trusted production hosts, so a site legitimately served on several hostnames does not fight the module.
 - Honour an explicit `BRACE_STAGING_GUARD_OFF` constant as a last-resort escape hatch in `wp-config.php`.
 
-### 2.3 What "loud" means
+### 2.4 What "loud" means
 
 - Admin bar badge, red, on every screen, front end and back end, for logged-in users.
 - Admin notice on the plugins and Brace settings screens stating what is being guarded and offering "This is production".
@@ -72,7 +94,7 @@ A legitimate domain migration produces exactly this false positive. So:
 
 **No.** Staging Guard writes no user data and deletes nothing. It does not touch the `DestructiveOperation` contract.
 
-It does change runtime behaviour, which is why section 2.2 and 2.3 carry the weight that a dry-run would carry in a destructive module. The escape hatch is the undo path.
+It does change runtime behaviour, which is why sections 2.3 and 2.4 carry the weight that a dry-run would carry in a destructive module. The escape hatch is the undo path.
 
 ## 4. Requirements
 
@@ -89,6 +111,7 @@ Five settings. Anything more belongs in section 9.
 | Email handling | `redirect` | `redirect` or `block`. Redirect is the default because it is the one that lets you see what would have been sent. |
 | Redirect address | site `admin_email` | Only shown when handling is `redirect`. |
 | Block external HTTP | on | |
+| Allow payment sandbox hosts | off | A one-click preset, see section 5.1. |
 | Additional allowed hosts | empty | One host per line, added to the built-in allowlist. |
 | Front-end banner | off | Admin bar badge is always on and is not a setting. |
 
@@ -98,6 +121,20 @@ Built-in HTTP allowlist, always active when blocking is on:
 - **The site's own host**, because WordPress makes loopback requests to itself for cron and Site Health. Forgetting this breaks cron on every guarded site.
 
 Redirected mail keeps the original recipient visible: subject is prefixed `[STAGING]` and an `X-Brace-Original-To` header carries the address it would have gone to.
+
+### 5.1 Payment processors, and why they are not simply allowlisted
+
+Testing checkout on staging is a real need, so there is a preset for it. It is off by default and it only ever contains **sandbox hostnames**, never live ones:
+
+`api.sandbox.paypal.com`, `apitest.gopay.cz`, `api.sandbox.checkout.com`, and the equivalents for the other common gateways. These hosts cannot move real money, so allowing them costs nothing.
+
+Live endpoints stay blocked, and one family of gateways deserves its own warning:
+
+> **Stripe cannot be allowlisted safely by hostname.** Test mode and live mode share `api.stripe.com`; the only difference is which API key the request carries. A host allowlist cannot see the key. So allowing `api.stripe.com` on a staging site that still holds the production key means staging can charge real cards. The same is true of Adyen and of most gateways that key-switch rather than host-switch.
+>
+> Brace therefore does not ship these hosts in any preset. They can be added by hand in "Additional allowed hosts", which puts the decision, and the blast radius, in the hands of somebody who typed the hostname on purpose.
+
+What the module does instead, and what is arguably worth more: **every blocked call is logged with its host**, so a developer who wonders why checkout stalls on staging sees `blocked: api.stripe.com` in the log rather than a silent hang.
 
 ## 6. WP-CLI surface
 
@@ -116,6 +153,13 @@ wp brace staging-guard log [--type=<mail|http>] [--limit=<n>]
 - `www.` prefix, uppercase host, explicit `:8080` port, IDN host and its punycode form, IP-literal host, `localhost`, sslip.io style host.
 - Subdomain-of-production (`staging.yourdomain.com`) must read as staging, not as production.
 
+`tests/fixtures/staging-guard/levels.php` proves the level rule in section 2.2, and it is the fixture that decides whether the rule was implemented or merely described:
+
+- `eurodomain.co.uk` and `eurodomain.com.au` must read as **apex**, not as subdomains, on a three-label host. This is the case that a dot-counting implementation gets wrong.
+- `staging.eurodomain.com` must read as a subdomain on the same label count.
+- `www.eurodomain.com` must normalize to the apex and never be guarded.
+- An unknown or newly created multi-part suffix must degrade to "subdomain", proving the stale-list path guards rather than exposes.
+
 `tests/fixtures/staging-guard/cloned-site.php` proves the crux of section 2.1: an options set where the production domain has been search-replaced to the staging domain everywhere, including any readable copy of it. The hashed baseline must survive and check B must still fire.
 
 ## 8. Inspiration and gaps
@@ -129,7 +173,8 @@ wp brace staging-guard log [--type=<mail|http>] [--limit=<n>]
 ## 9. Out of scope
 
 - **Auto-enabling itself.** Detection is automatic; activation is not. A module that switches itself on breaks the trust contract.
-- **Payment gateway sandboxing.** Most gateways are HTTP APIs and are already stopped by the external HTTP block. Explicit per-gateway handling (forcing WooCommerce test mode) is a candidate for a later version once the block is proven in the field.
+- **Forcing gateways into test mode.** Section 5.1 covers the traffic; flipping WooCommerce or a specific gateway into test mode means writing to that plugin's settings, which is a different kind of act and belongs in its own spec.
+- **Allowlisting live payment endpoints.** Explained in section 5.1. Available by hand, never by preset.
 - **Disabling cron.** Too blunt. Cron is how you find out staging behaves like production.
 - **Search engine visibility.** WordPress already has a setting for it.
 - **Anonymizing or scrubbing customer data on the copy.** A real need and a much larger module. Separate spec.

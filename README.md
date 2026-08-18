@@ -2,7 +2,7 @@
 
 Brace braces your WordPress. A modular toolbox where every module is off by default. No nags, no tracking, clean uninstall.
 
-Homepage: https://tomherudek.com/brace/
+Homepage: https://github.com/tomasherudek/bracewp
 
 ## The trust contract
 

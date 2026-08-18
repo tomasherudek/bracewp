@@ -3,7 +3,7 @@
     "description": "Brace braces your WordPress. A modular toolbox where every module is off by default. No nags, no tracking, clean uninstall.",
     "type": "wordpress-plugin",
     "license": "GPL-2.0-or-later",
-    "homepage": "https://tomherudek.com/brace/",
+    "homepage": "https://github.com/tomasherudek/bracewp",
     "authors": [
         {
             "name": "Tom Herudek",

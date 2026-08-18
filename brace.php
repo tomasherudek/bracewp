@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: Brace
- * Plugin URI: https://tomherudek.com/brace/
+ * Plugin URI: https://github.com/tomasherudek/bracewp
  * Description: Braces your WordPress. A modular toolbox where every module is off by default. No nags, no tracking, clean uninstall.
  * Version: 0.1.0
  * Requires at least: 6.7

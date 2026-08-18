@@ -153,7 +153,7 @@ final class Admin {
 				printf(
 					/* translators: %s: link to the Brace homepage. */
 					esc_html__( 'Brace by %s', 'brace' ),
-					'<a href="https://tomherudek.com/brace/">Tom Herudek</a>'
+					'<a href="https://github.com/tomasherudek/bracewp">Tom Herudek</a>'
 				);
 				?>
 			</p>

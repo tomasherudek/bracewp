@@ -9,7 +9,7 @@
 .gitattributes
 .phpunit.result.cache
 .phpcs.cache
-composer.json
+.gitkeep
 composer.lock
 phpcs.xml.dist
 phpstan.neon.dist

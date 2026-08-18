@@ -69,10 +69,17 @@ jobs:
           tools: composer:v2
       - name: Install runtime autoloader
         run: composer install --no-dev --prefer-dist --no-progress
+      - name: Build release package
+        # Mirror the WP.org deploy: check only what .distignore keeps,
+        # under the real plugin slug instead of the repo name.
+        run: |
+          mkdir -p build/brace
+          rsync -a --delete --exclude-from=.distignore ./ build/brace/
       - name: Run Plugin Check
         uses: wordpress/plugin-check-action@v1
         with:
-          build-dir: './'
+          build-dir: './build/brace'
+          slug: 'brace'
 
   i18n:
     name: i18n makepot check

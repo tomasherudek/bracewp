@@ -111,7 +111,7 @@ Five settings. Anything more belongs in section 9.
 | Email handling | `redirect` | `redirect` or `block`. Redirect is the default because it is the one that lets you see what would have been sent. |
 | Redirect address | site `admin_email` | Only shown when handling is `redirect`. |
 | Block external HTTP | on | |
-| Allow payment sandbox hosts | off | A one-click preset, see section 5.1. |
+| Allow payment gateways | **on** | Test and live endpoints both, see section 5.1. Turn it off to block them. |
 | Additional allowed hosts | empty | One host per line, added to the built-in allowlist. |
 | Front-end banner | off | Admin bar badge is always on and is not a setting. |
 
@@ -122,19 +122,21 @@ Built-in HTTP allowlist, always active when blocking is on:
 
 Redirected mail keeps the original recipient visible: subject is prefixed `[STAGING]` and an `X-Brace-Original-To` header carries the address it would have gone to.
 
-### 5.1 Payment processors, and why they are not simply allowlisted
+### 5.1 Payment gateways are allowed, test and live alike
 
-Testing checkout on staging is a real need, so there is a preset for it. It is off by default and it only ever contains **sandbox hostnames**, never live ones:
+Gateway hosts ship in the allowlist and are **allowed by default**, live endpoints included. This is deliberate, and it is the opposite of the cautious-looking choice, so here is the reasoning.
 
-`api.sandbox.paypal.com`, `apitest.gopay.cz`, `api.sandbox.checkout.com`, and the equivalents for the other common gateways. These hosts cannot move real money, so allowing them costs nothing.
+**Blocking by hostname cannot do the job anyway.** Stripe serves test mode and live mode from the same `api.stripe.com`; the difference is the API key on the request, which a host allowlist cannot see. Adyen and most other gateways key-switch rather than host-switch. So a hostname allowlist can only choose between breaking checkout entirely and letting everything through. There is no safe middle for it to occupy.
 
-Live endpoints stay blocked, and one family of gateways deserves its own warning:
+**The risk is not what it first looks like.** Email is the danger on a copied site because it fires on its own: a cron tick, an order status change, an import, and four hundred customers hear from a test server nobody was watching. A payment is not like that. It takes a human deliberately walking a checkout and entering real card details. Guarding against automatic harm is the module's job; guarding against a developer who typed their own card number into a staging site is not.
 
-> **Stripe cannot be allowlisted safely by hostname.** Test mode and live mode share `api.stripe.com`; the only difference is which API key the request carries. A host allowlist cannot see the key. So allowing `api.stripe.com` on a staging site that still holds the production key means staging can charge real cards. The same is true of Adyen and of most gateways that key-switch rather than host-switch.
->
-> Brace therefore does not ship these hosts in any preset. They can be added by hand in "Additional allowed hosts", which puts the decision, and the blast radius, in the hands of somebody who typed the hostname on purpose.
+**Switching the gateway to test mode is the site owner's job**, and it is the standard first step of setting up any staging copy. Brace does not do it for them (section 9).
 
-What the module does instead, and what is arguably worth more: **every blocked call is logged with its host**, so a developer who wonders why checkout stalls on staging sees `blocked: api.stripe.com` in the log rather than a silent hang.
+**A confusing default gets the whole guard switched off.** If checkout hangs on staging with no explanation, the developer's fix is to disable HTTP blocking altogether, and with it the blocking of CRM webhooks, transactional email APIs, shipping labels, and analytics. The blunt-looking default produces the less safe outcome in practice.
+
+The list ships as a data file alongside the public suffix list from section 2.2, and covers the gateways worth covering: Stripe, PayPal, Adyen, Braintree, Square, Mollie, Klarna, Checkout.com, Authorize.Net, Paddle, and the Czech market ones (GoPay, ComGate, Barion, ThePay), each with both their test and live hosts.
+
+**What the module does instead of blocking:** every allowed call to a gateway host is logged, and the admin notice on a guarded site states in plain words that payment endpoints are reachable from this copy. Whoever is looking at the site can see the exposure. Turning the setting off blocks the whole list for anyone who wants it that way.
 
 ## 6. WP-CLI surface
 
@@ -173,8 +175,7 @@ wp brace staging-guard log [--type=<mail|http>] [--limit=<n>]
 ## 9. Out of scope
 
 - **Auto-enabling itself.** Detection is automatic; activation is not. A module that switches itself on breaks the trust contract.
-- **Forcing gateways into test mode.** Section 5.1 covers the traffic; flipping WooCommerce or a specific gateway into test mode means writing to that plugin's settings, which is a different kind of act and belongs in its own spec.
-- **Allowlisting live payment endpoints.** Explained in section 5.1. Available by hand, never by preset.
+- **Forcing gateways into test mode.** Payment traffic is allowed through (section 5.1), and switching the gateway to test mode stays the site owner's job. Doing it for them means writing to another plugin's settings, which is a different kind of act and belongs in its own spec.
 - **Disabling cron.** Too blunt. Cron is how you find out staging behaves like production.
 - **Search engine visibility.** WordPress already has a setting for it.
 - **Anonymizing or scrubbing customer data on the copy.** A real need and a much larger module. Separate spec.

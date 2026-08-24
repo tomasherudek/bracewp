@@ -75,7 +75,9 @@ final class Plugin {
 	 * @return array<string, class-string<Module>>
 	 */
 	public static function modules(): array {
-		return [];
+		return [
+			'staging-anonymize' => \Brace\Modules\StagingAnonymize\StagingAnonymizeModule::class,
+		];
 	}
 
 	/**

@@ -90,6 +90,15 @@ final class Requirements {
 	}
 
 	/**
+	 * Require an active WooCommerce plugin.
+	 *
+	 * @return self
+	 */
+	public function wooCommerce(): self {
+		return $this->add( RequirementType::WooCommerce, 'woocommerce' );
+	}
+
+	/**
 	 * Whether every declared requirement is met right now.
 	 *
 	 * @return bool
@@ -190,6 +199,7 @@ final class Requirements {
 				(string) $value
 			),
 			RequirementType::Multisite => is_multisite() ? null : __( 'This module only works on a multisite installation.', 'brace' ),
+			RequirementType::WooCommerce => class_exists( 'WooCommerce' ) ? null : __( 'This module needs WooCommerce installed and active.', 'brace' ),
 		};
 	}
 

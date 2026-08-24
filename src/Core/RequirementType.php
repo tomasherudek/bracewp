@@ -17,4 +17,5 @@ enum RequirementType: string {
 	case Memory       = 'memory';
 	case Binary       = 'binary';
 	case Multisite    = 'multisite';
+	case WooCommerce  = 'woocommerce';
 }

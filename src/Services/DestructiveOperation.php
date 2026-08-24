@@ -48,6 +48,15 @@ interface DestructiveOperation {
 	public function execute( Batch $batch ): void;
 
 	/**
+	 * Whether execute() has no work left. BatchRunner polls this to know
+	 * when to stop ticking; an operation that finishes in one call simply
+	 * returns true after the first execute().
+	 *
+	 * @return bool
+	 */
+	public function finished(): bool;
+
+	/**
 	 * Report what actually changed, after execute() completed.
 	 *
 	 * @return array<string, mixed>

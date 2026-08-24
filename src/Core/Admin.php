@@ -8,10 +8,13 @@
 namespace Brace\Core;
 
 /**
- * Minimal settings page under Settings, Brace: lists every registered
- * module with an enable toggle. Modules whose requirements are unmet get
- * a disabled toggle plus the human explanation. Server-rendered PHP and
- * vanilla JS only, no React, no build step.
+ * Brace owns a top level admin menu. The menu's own page lists every
+ * registered module with an enable toggle; modules whose requirements are
+ * unmet get a disabled toggle plus the human explanation. Every enabled
+ * module that has a settings surface gets its own submenu page underneath,
+ * so a module never has to fight for room on a shared screen.
+ *
+ * Server-rendered PHP and vanilla JS only, no React, no build step.
  */
 final class Admin {
 
@@ -19,11 +22,24 @@ final class Admin {
 	public const SAVE_ACTION = 'brace_save_modules';
 
 	/**
+	 * Dashicon shown next to the top level menu entry.
+	 */
+	private const MENU_ICON = 'dashicons-shield-alt';
+
+	/**
 	 * The plugin core.
 	 *
 	 * @var Plugin
 	 */
 	private Plugin $plugin;
+
+	/**
+	 * Hook suffixes of the pages we registered, so asset loading can key
+	 * off what WordPress actually gave us instead of guessing the string.
+	 *
+	 * @var list<string>
+	 */
+	private array $hookSuffixes = [];
 
 	/**
 	 * Hook everything into the admin.
@@ -50,28 +66,75 @@ final class Admin {
 	}
 
 	/**
-	 * Register the settings page.
+	 * The submenu slug of a module's settings page.
+	 *
+	 * @param string $slug Module slug.
+	 * @return string
+	 */
+	public static function modulePageSlug( string $slug ): string {
+		return self::PAGE_SLUG . '-' . $slug;
+	}
+
+	/**
+	 * Register the top level menu, the module list, and one submenu page
+	 * per enabled module that has settings.
 	 *
 	 * @return void
 	 */
 	public function addMenu(): void {
-		add_options_page(
+		$this->hookSuffixes = [];
+
+		$this->hookSuffixes[] = (string) add_menu_page(
 			__( 'Brace', 'brace' ),
 			__( 'Brace', 'brace' ),
 			'manage_options',
 			self::PAGE_SLUG,
+			[ $this, 'renderPage' ],
+			self::MENU_ICON
+		);
+
+		// Without this, WordPress labels the first submenu entry "Brace" too.
+		add_submenu_page(
+			self::PAGE_SLUG,
+			__( 'Brace modules', 'brace' ),
+			__( 'Modules', 'brace' ),
+			'manage_options',
+			self::PAGE_SLUG,
 			[ $this, 'renderPage' ]
 		);
+
+		foreach ( $this->modulesWithSettings() as $module ) {
+			$view = $module->settingsView();
+
+			if ( null === $view ) {
+				continue;
+			}
+
+			$suffix = add_submenu_page(
+				self::PAGE_SLUG,
+				$module->title(),
+				$module->title(),
+				'manage_options',
+				self::modulePageSlug( $module->slug() ),
+				function () use ( $module, $view ): void {
+					$this->renderModulePage( $module, $view );
+				}
+			);
+
+			if ( is_string( $suffix ) ) {
+				$this->hookSuffixes[] = $suffix;
+			}
+		}
 	}
 
 	/**
-	 * Enqueue the admin assets, only on our own page.
+	 * Enqueue the admin assets, only on our own pages.
 	 *
 	 * @param string $hook_suffix Current admin page hook.
 	 * @return void
 	 */
 	public function enqueueAssets( string $hook_suffix ): void {
-		if ( 'settings_page_' . self::PAGE_SLUG !== $hook_suffix ) {
+		if ( ! in_array( $hook_suffix, $this->hookSuffixes, true ) ) {
 			return;
 		}
 
@@ -102,7 +165,7 @@ final class Admin {
 	}
 
 	/**
-	 * Render the settings page.
+	 * Render the module list, the top level page.
 	 *
 	 * @return void
 	 */
@@ -208,10 +271,56 @@ final class Admin {
 					'page'    => self::PAGE_SLUG,
 					'updated' => 'true',
 				],
-				admin_url( 'options-general.php' )
+				admin_url( 'admin.php' )
 			)
 		);
 		exit;
+	}
+
+	/**
+	 * Render one module's settings page.
+	 *
+	 * @param Module   $module The module.
+	 * @param callable $view   Its settings renderer.
+	 * @return void
+	 */
+	private function renderModulePage( Module $module, $view ): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		?>
+		<div class="wrap brace-admin brace-module-page">
+			<h1><?php echo esc_html( $module->title() ); ?></h1>
+			<p><?php echo esc_html( $module->description() ); ?></p>
+			<?php $view(); ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Enabled modules that expose a settings surface, in registration order.
+	 *
+	 * @return list<Module>
+	 */
+	private function modulesWithSettings(): array {
+		$registry = $this->plugin->registry();
+		$modules  = [];
+
+		foreach ( array_keys( $registry->all() ) as $slug ) {
+			if ( ! $registry->isEnabled( $slug ) ) {
+				continue;
+			}
+
+			$module = $registry->make( $slug );
+
+			if ( null === $module->settingsView() ) {
+				continue;
+			}
+
+			$modules[] = $module;
+		}
+
+		return $modules;
 	}
 
 	/**
@@ -234,7 +343,16 @@ final class Admin {
 					<?php disabled( ModuleState::Unavailable === $state ); ?>
 				/>
 			</td>
-			<td><strong><?php echo esc_html( $module->title() ); ?></strong></td>
+			<td>
+				<strong><?php echo esc_html( $module->title() ); ?></strong>
+				<?php if ( ModuleState::Enabled === $state && null !== $module->settingsView() ) : ?>
+					<p class="description">
+						<a href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::modulePageSlug( $module->slug() ) ) ); ?>">
+							<?php esc_html_e( 'Settings', 'brace' ); ?>
+						</a>
+					</p>
+				<?php endif; ?>
+			</td>
 			<td>
 				<?php echo esc_html( $module->description() ); ?>
 				<?php if ( [] !== $unmet ) : ?>

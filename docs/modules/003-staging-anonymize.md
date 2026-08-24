@@ -19,7 +19,8 @@ Staging Anonymize rewrites every identity on the copy into a deterministic fake,
 **In scope, always:**
 
 - **WP users**: email, login, nicename, display name, URL, password, activation key, and the mapped meta (names, nickname, description, and the Woo billing/shipping keys where they exist). Excluded roles are skipped (default: `administrator`).
-- **Comment authors** — blog comments and product reviews alike (author name, email, URL, IP). Order notes are the one exception, kept by owner decision (section 2.4).
+- **Comment authors** — blog comments and product reviews alike (author name, email, URL, IP).
+- **Order notes** — content and author rewritten in place to `Anonymized`, author email/URL/IP emptied, and the customer-provided note rewritten the same way on every order (HPOS `customer_note`, legacy `post_excerpt`). Note meta is dropped on an allow-list keeping only `is_customer_note`: gateway payloads live there as arbitrary serialized blobs, so an unrecognised key is assumed to carry data. Not faked — notes are free text written by gateways and staff, so payment references, order ids and customer details sit in no fixed field a fake could replace. Not deleted either, see §2.4.
 - **Credentials:** every non-excluded user gets a new random password; activation keys and session tokens are cleared. Production password hashes are crackable material and have no business on staging.
 
 **In scope when WooCommerce data is found:**
@@ -108,21 +109,24 @@ This module must be **impossible to run against production**. Three independent 
    | Host is `localhost`, an IP literal, single-label, or under `.test`/`.local`/`.invalid`/`.example`/`.internal` | staging |
    | Anything else, **including a bare `staging.yourdomain.com`** | **production** |
 
-   That last row is the cost, and it is paid on purpose: a subdomain mismatch is only meaningful against a recorded baseline, and guessing without one risks the unforgivable direction (production read as staging, customer data destroyed). So a copy on a real subdomain needs one line in its `wp-config.php` before this module will touch it. Section 2.3's asymmetry from 001 applies unchanged: a refused run is an inconvenience, a wrongful run is unrecoverable.
+   That last row is the cost, and it is paid on purpose: a subdomain mismatch is only meaningful against a recorded baseline, and guessing without one risks the unforgivable direction (production read as staging, customer data destroyed). Section 2.3's asymmetry from 001 still shapes the defaults — but real staging hosts broke the original "no override" rule in practice: WP Engine's staging copies live on `<install>.wpenginepowered.com`, a perfectly public-looking host, and the module refused to run exactly where it was built to run. Setting the constant remains the recommended fix (WP Engine locks `wp-config.php` sections, but its own defines section takes custom constants).
 
-   There is no override flag. On a production verdict the CLI errors and the settings screen says so in red.
+   So since 0.1.0-004 a production verdict is a **loud warning, not a wall**: the settings screen shows the runner with an orange warning instead of hiding it, the browser confirm dialog switches to the scarier production wording, and the CLI demands an interactive yes (`--yes` for scripts) on top of `--confirm-host`. The typed hostname (gate 2) is the override — GitHub-delete-repo style, re-checked on every tick, so a site repointed at production mid-run stops matching and the run halts.
 
 2. **Typed confirmation.** `--confirm-host=<host>` must match the site's own host exactly (normalized: lowercased, `www.` stripped). GitHub-delete-repo style.
 3. **Destructive-operation flow.** Dry run first, backup before execute, per the contract (section 3).
 
 ### 2.4 Owner-decided exceptions (known PII residue)
 
-Two data classes are **deliberately kept**, by owner decision, and the post-run report says so in plain words:
+One data class is **deliberately kept**, by owner decision, and the post-run report says so in plain words:
 
-- **Order notes** — all of them, including customer-provided notes, which are free text and can carry names, phones, delivery instructions. Kept because the notes are the order's operational history and the owner wants them readable.
 - **`wc-logs` files** in uploads — gateway and shipping plugin logs cloned from production can contain full request payloads. Kept by owner decision; they regenerate on staging, so deleting them manually after cloning remains an option.
 
-Anything reading this module's report must not claim "all PII removed." The honest claim is: *identity fields anonymized; free-text notes and log files kept by choice.*
+Order notes used to be the second exception. They are now scrubbed (section 2), because on a real store the notes turned out to be where gateway references, order ids and staff names accumulate — the operational history is not worth carrying that onto a copy.
+
+They are **rewritten, not deleted**. Deleting them removes the data but also the shape of the order history: note counts, `comment_count` on the order post and a populated notes panel are things a store with history has, and a staging copy that lost them stops exercising those paths. The `Anonymized` label also reads as *this was scrubbed*, where an empty panel reads as *this order never had notes* — the quieter lie is the worse one when someone opens the copy months later. Row counts and table size are unchanged by this stage; scrubbing is not a cleanup.
+
+Anything reading this module's report must not claim "all PII removed." The honest claim is: *identity fields anonymized; order notes scrubbed; log files kept by choice.*
 
 ## 3. Destructive?
 
@@ -133,15 +137,15 @@ Anything reading this module's report must not claim "all PII removed." The hone
 - **`backup()`** — affected tables dumped to `uploads/brace/backups/{id}/` (protected by `.htaccess` + `index.php`) before execute. **And here the contract bites its own tail: the backup is a file full of the exact PII this module exists to remove.** Handled honestly rather than pretended away: the CLI prints a warning naming the backup as PII the moment it creates one, and `purge-backup` is a first-class command. Tables over 512 MB are refused with a sentence telling you to re-run with `--no-backup`.
 
   **Not built in v0:** the draft promised a 7-day auto-purge. There is no scheduled purge yet — purging is manual. Until it exists, `--no-backup` is the honest default for sync scripts, since the true undo path is re-cloning production anyway.
-- **`execute( Batch $batch )`** — chunked by the existing `Batch`/`BatchRunner` services; a 100k-order store must not time out. Idempotent: re-running rewrites already-fake values to the same fake values.
-- **`report()`** — rows changed per stage, storages touched, login collisions survived (section 2.1), exceptions kept, timestamp. Stored under the module's `last_run` setting and surfaced on its settings screen: *"Customer data on this copy was anonymized on {date}. Kept on purpose: order notes and wc-logs files."* **Not built in v0:** the notice is on this module's page only, not site-wide across Brace screens.
+- **`execute( Batch $batch )`** — chunked by the existing `Batch`/`BatchRunner` services; a 100k-order store must not time out. Idempotent: re-running rewrites already-fake values to the same fake values. On the tick that finishes the last stage it calls `wp_cache_flush()` (plus WooCommerce's order transients). **This is not optional bookkeeping.** Every stage writes through `$wpdb` directly, so no WordPress write path ran and nothing invalidated the object cache; on a host with a persistent one — Memcached on WP Engine, Redis elsewhere — the tables end up clean while the admin keeps serving real names and real note text from cache. That reads as "the run did nothing" and invites a second run instead of a flush. A site-wide flush is acceptable here and only here: the module refuses to run anywhere but a staging copy, where a cold cache costs nothing. Page caches are the host's and are out of scope — on WP Engine the admin is not page-cached, so the object cache is the one that bites.
+- **`report()`** — rows changed per stage, storages touched, login collisions survived (section 2.1), exceptions kept, timestamp. Stored under the module's `last_run` setting and surfaced on its settings screen: *"Customer data on this copy was anonymized on {date}. Kept on purpose: wc-logs files."* **Not built in v0:** the notice is on this module's page only, not site-wide across Brace screens.
 
 **Undo path:** restore from the backup, or re-clone production. Stated in the UI, not implied. Restore is manual in v0 — the dumps are plain SQL under `uploads/brace/backups/{id}/`, one file per table; there is no `restore` command.
 
 ## 4. Requirements
 
 - Plugin baseline (PHP 7.4, WP 6.7). **Nothing else** — `Requirements::none()`.
-- Staging verdict from `Brace\Services\Environment` (section 2.3). Not a soft requirement: `run` refuses on a production verdict, with no override flag.
+- Staging verdict from `Brace\Services\Environment` (section 2.3). A production verdict warns loudly and demands the extra confirmation on top of the typed host; it no longer refuses outright.
 
 **WooCommerce is not a requirement, and an earlier draft was wrong to make it one.** The reasoning then was "it anonymizes customers and orders, and there are none without WooCommerce" — which quietly assumes a WP user only matters as a shop customer. A membership site, a client portal, or a blog with open registration has real people in `wp_users` and no shop anywhere. Gating on WooCommerce meant those copies got no protection at all, which is the wrong failure direction for a module whose whole purpose is to stop PII leaving production. Shop coverage is now additive and table-detected (section 2), so the requirement bought nothing that detection does not already handle.
 
@@ -181,7 +185,7 @@ A run button on the module's settings page, behind a typed host confirmation and
 | `changed` | Per-stage counters, so the final report covers the whole run and not just the last tick. |
 | `hash` | The single password hash. A run resumed with a freshly generated hash would leave the user table split across two different passwords. |
 
-**Guards are re-checked on every tick, not just at the start.** Capability, nonce, staging verdict, and host confirmation are all re-evaluated per request: a tick arriving after someone repointed this install at production must not be allowed to finish a run that was legitimate when it began. A production verdict mid-run also discards the stored state rather than leaving it to be resumed later.
+**Guards are re-checked on every tick, not just at the start.** Capability, nonce, and host confirmation are all re-evaluated per request: a tick arriving after someone repointed this install at production must not be allowed to finish a run that was legitimate when it began. The repoint protection now rides on the host check alone — repointing changes the site's own host, the typed confirmation stops matching, and the run halts with the state kept for a legitimate resume.
 
 **Concurrency:** the stored state records the user who owns the run. A second administrator ticking the same run is refused, unless the run has gone untouched for two minutes — a closed browser tab must not lock the module until someone digs the option out of the database.
 
@@ -211,7 +215,7 @@ The intended automation is: clone from production, then `wp brace staging-anonym
 - `seed-demo-site.php` — fills a throwaway site with invented Czech customers, orders, comments and order notes. It deliberately seeds a user whose login is `user7`, so the `user_login` UNIQUE collision from section 2.1 actually occurs instead of being assumed.
 - `render-check.php` — renders the settings screen outside a browser, to catch a fatal before someone finds it by clicking.
 
-**Not built — the part that would actually prove the spec.** The integration suite below needs a WordPress + WooCommerce harness (wp-env) that this plugin does not have yet. Until it exists, the stage machine is verified by reading, by the manual harness above, and by one full run against a seeded HPOS store on 2026-08-24 (30 users, 10 orders, guest orders keyed by order id, the `user7` collision resolved, comments scrubbed, order notes left readable as designed). That is a demonstration, not coverage: it is not repeatable in CI and it asserts nothing.
+**Not built — the part that would actually prove the spec.** The integration suite below needs a WordPress + WooCommerce harness (wp-env) that this plugin does not have yet. Until it exists, the stage machine is verified by reading, by the manual harness above, and by one full run against a seeded HPOS store on 2026-08-24 (30 users, 10 orders, guest orders keyed by order id, the `user7` collision resolved, comments scrubbed). That run predates the order-note deletion, which has not been exercised against a seeded store. That is a demonstration, not coverage: it is not repeatable in CI and it asserts nothing.
 
 `tests/fixtures/staging-anonymize/store.php` would build a miniature store exercising every branch:
 
@@ -225,7 +229,7 @@ Assertions that would decide whether the spec was implemented or merely describe
 - **Determinism:** run twice, dump, byte-identical. Re-seed fixture, run again, same fakes for same IDs.
 - **Storage matrix:** the suite runs three times — HPOS-only, legacy-only, HPOS with compatibility sync — and in the sync case asserts **both** storages are clean. This is the case existing tools fail.
 - **Traceback:** every email in the dump matches `{entity}.{id}` and the id resolves to the fixture row it came from.
-- **Residue scan:** grep the full dump for every real PII string seeded by the fixture; the only permitted hits are in order notes and the excluded admin (section 2.4 proven, not assumed).
+- **Residue scan:** grep the full dump for every real PII string seeded by the fixture; the only permitted hits are the excluded admin (section 2.4 proven, not assumed). The seeded order notes must be absent from the dump entirely, `wp_commentmeta` included.
 - Webhooks all `disabled`; sessions empty; tokens gone; download permission still resolves for the fake email.
 
 ## 8. Inspiration and gaps

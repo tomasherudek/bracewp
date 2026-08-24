@@ -8,6 +8,7 @@
 namespace Brace\Tests\Unit\Modules\StagingAnonymize;
 
 use Brace\Modules\StagingAnonymize\AnonymizeOperation;
+use Brace\Services\Batch;
 use Brace\Services\FakeIdentity;
 use Brace\Tests\Unit\TestCase;
 
@@ -101,14 +102,39 @@ final class AnonymizeOperationStateTest extends TestCase {
 	/**
 	 * A state at or past the last stage means the run is over.
 	 *
+	 * The literal is the number of stages; adding a stage moves it.
+	 *
 	 * @return void
 	 */
 	public function test_restoring_a_completed_state_reports_finished(): void {
 		$resumed = $this->operation();
-		$resumed->restore( [ 'stage' => 10 ] );
+		$resumed->restore( [ 'stage' => 11 ] );
 
 		$this->assertTrue( $resumed->finished() );
 		$this->assertSame( 'done', $resumed->currentStage() );
+	}
+
+	/**
+	 * A finished run does not flush again on the next tick.
+	 *
+	 * The flush is what makes an anonymized copy actually *look* anonymized:
+	 * the stages write through $wpdb, so a persistent object cache keeps
+	 * serving the old rows until something drops them. A browser-driven run
+	 * keeps ticking a finished operation, and the early return in execute()
+	 * is the only thing keeping that from flushing the cache on every poll.
+	 * Without it, a site-wide flush fires in a loop.
+	 *
+	 * @return void
+	 */
+	public function test_a_finished_run_does_not_flush_again(): void {
+		\Brain\Monkey\Functions\expect( 'wp_cache_flush' )->never();
+
+		$resumed = $this->operation();
+		$resumed->restore( [ 'stage' => 11 ] );
+
+		$resumed->execute( new Batch() );
+
+		$this->assertTrue( $resumed->finished() );
 	}
 
 	/**
@@ -138,7 +164,7 @@ final class AnonymizeOperationStateTest extends TestCase {
 	public static function provideUntrustworthyStages(): array {
 		return [
 			'negative'      => [ -5, 0 ],
-			'past the end'  => [ 999, 10 ],
+			'past the end'  => [ 999, 11 ],
 			'not a number'  => [ 'users', 0 ],
 			'null'          => [ null, 0 ],
 			'floating'      => [ 2.9, 2 ],

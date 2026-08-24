@@ -25,8 +25,12 @@ use Brace\Services\FakeIdentity;
  * gets both order locations cleaned, and a deactivated WooCommerce still
  * has its leftover customer tables scrubbed.
  *
+ * Order notes are deleted outright rather than faked: they are free text
+ * written by gateways and staff, so the payment references and customer
+ * details in them sit in no fixed field a fake could replace.
+ *
  * Owner-decided exceptions, kept on purpose and reported honestly:
- * order notes (all of them) and wc-logs files on disk.
+ * wc-logs files on disk.
  *
  * Runs as a stage machine: execute() advances the current stage in
  * chunks until the Batch budget says stop, and is re-entrant within one
@@ -64,6 +68,18 @@ final class AnonymizeOperation implements DestructiveOperation {
 		'_customer_user_agent',
 		'_transaction_id',
 	];
+
+	/**
+	 * What free-text fields are rewritten to when there is no fake to derive.
+	 *
+	 * A visible label rather than an empty string: emptying a field makes a
+	 * scrubbed record indistinguishable from one that never held anything,
+	 * and someone reading the staging admin months later has no way to tell
+	 * which. Deliberately not translated — it is a data marker written into
+	 * the database, not UI copy, and it must not change meaning with the
+	 * site's locale.
+	 */
+	private const REDACTED = 'Anonymized';
 
 	/**
 	 * Order meta keys wiped outright: references into real payment gateway
@@ -115,6 +131,7 @@ final class AnonymizeOperation implements DestructiveOperation {
 		'orders_legacy',
 		'customer_lookup',
 		'downloads',
+		'order_notes',
 		'comments',
 		'sessions',
 		'tokens',
@@ -207,8 +224,9 @@ final class AnonymizeOperation implements DestructiveOperation {
 		global $wpdb;
 
 		$estimate = [
-			'users'    => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->users}" ) - count( $this->excludedUserIds() ),
-			'comments' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE comment_type <> 'order_note'" ),
+			'users'       => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->users}" ) - count( $this->excludedUserIds() ),
+			'comments'    => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE comment_type <> 'order_note'" ),
+			'order_notes' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments} WHERE comment_type = 'order_note'" ),
 		];
 
 		if ( $this->tableExists( $wpdb->prefix . 'wc_orders' ) ) {
@@ -284,6 +302,13 @@ final class AnonymizeOperation implements DestructiveOperation {
 	 * @return void
 	 */
 	public function execute( Batch $batch ): void {
+		// Early return, not just a loop guard: it makes the flush below fire
+		// on the tick that finishes the run and never again. A browser-driven
+		// run keeps calling execute() on a finished operation.
+		if ( $this->finished() ) {
+			return;
+		}
+
 		while ( ! $this->finished() && ! $batch->shouldStop() ) {
 			$done = $this->runStage( self::STAGES[ $this->stageIndex ] );
 
@@ -292,6 +317,39 @@ final class AnonymizeOperation implements DestructiveOperation {
 				$this->cursor        = 0;
 				$this->stagePrepared = false;
 			}
+		}
+
+		if ( $this->finished() ) {
+			$this->flushCaches();
+		}
+	}
+
+	/**
+	 * Drop everything cached from before the rewrite.
+	 *
+	 * Every stage writes through $wpdb directly, so none of the WordPress
+	 * write paths ran and nothing invalidated the object cache. On a host
+	 * with a persistent one — Memcached on WP Engine, Redis elsewhere — the
+	 * cache keeps serving the pre-anonymization rows: the tables are clean
+	 * and the admin still shows real names and real note text. That failure
+	 * is worse than a loud one, because it reads as "the run did nothing"
+	 * and invites a second run rather than a cache flush.
+	 *
+	 * Per-row invalidation in the stages is not enough on its own. It misses
+	 * whatever else cached a record derived from these rows — list-table
+	 * queries, WooCommerce's own order and report transients.
+	 *
+	 * A flush is site-wide by nature. That is acceptable here and only here:
+	 * this module refuses to run anywhere but a staging copy, where a cold
+	 * cache costs nothing.
+	 *
+	 * @return void
+	 */
+	private function flushCaches(): void {
+		wp_cache_flush();
+
+		if ( function_exists( 'wc_delete_shop_order_transients' ) ) {
+			wc_delete_shop_order_transients();
 		}
 	}
 
@@ -321,6 +379,8 @@ final class AnonymizeOperation implements DestructiveOperation {
 				return $this->stageCustomerLookup();
 			case 'downloads':
 				return $this->stageDownloads();
+			case 'order_notes':
+				return $this->stageOrderNotes();
 			case 'comments':
 				return $this->stageComments();
 			case 'sessions':
@@ -430,7 +490,6 @@ final class AnonymizeOperation implements DestructiveOperation {
 		return array_merge(
 			$kept,
 			[
-				__( 'Order notes, including customer-provided notes (owner decision; free text may contain PII).', 'brace' ),
 				__( 'wc-logs files in uploads (owner decision; production logs may contain PII).', 'brace' ),
 				__( 'City, postcode, country and state on all addresses (shipping zones and taxes keep working).', 'brace' ),
 			]
@@ -912,9 +971,107 @@ final class AnonymizeOperation implements DestructiveOperation {
 	}
 
 	/**
+	 * Order notes stage: every order note is rewritten in place to the
+	 * redaction label, and the customer-provided note on the order itself is
+	 * rewritten the same way in both storages.
+	 *
+	 * Notes are free text written by staff, gateways and customers — gateway
+	 * transaction and charge ids, refund reasons, delivery instructions,
+	 * email addresses, whole support exchanges. There is no field to rewrite
+	 * into a deterministic fake the way a name or an address has, so the
+	 * content is replaced wholesale rather than faked.
+	 *
+	 * Rewritten, not deleted: the rows carry the shape of the order history.
+	 * Keeping them leaves note counts, `comment_count` on the order post and
+	 * the admin's notes panel populated, so a staging copy still exercises
+	 * the paths a store with history exercises. A label also reads as
+	 * "this was scrubbed" where an empty panel reads as "this order never
+	 * had notes" — the second is a quieter and more misleading lie.
+	 *
+	 * `comment_author` goes too: on a real store it holds the names of the
+	 * staff who wrote the notes, which is as much personal data as anything
+	 * in the body. Email, URL and IP are emptied rather than labelled,
+	 * because they are format-constrained and admin screens do render them.
+	 *
+	 * @return bool Stage finished.
+	 */
+	private function stageOrderNotes(): bool {
+		global $wpdb;
+
+		if ( ! $this->stagePrepared ) {
+			$this->stagePrepared = true;
+
+			$orders = $wpdb->prefix . 'wc_orders';
+
+			if ( $this->tableExists( $orders ) ) {
+				$this->changed['customer_notes'] = ( $this->changed['customer_notes'] ?? 0 ) + (int) $wpdb->query(
+					$wpdb->prepare(
+						"UPDATE {$orders} SET customer_note = %s WHERE customer_note <> ''",
+						self::REDACTED
+					)
+				);
+			}
+
+			$this->changed['customer_notes'] = ( $this->changed['customer_notes'] ?? 0 ) + (int) $wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$wpdb->posts} SET post_excerpt = %s
+					 WHERE post_type IN ('shop_order', 'shop_order_refund') AND post_excerpt <> ''",
+					self::REDACTED
+				)
+			);
+		}
+
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT comment_ID FROM {$wpdb->comments}
+				 WHERE comment_type = 'order_note' AND comment_ID > %d ORDER BY comment_ID LIMIT %d",
+				$this->cursor,
+				$this->chunk
+			)
+		);
+
+		if ( [] === $ids ) {
+			return true;
+		}
+
+		$ids          = array_map( 'intval', $ids );
+		$this->cursor = (int) end( $ids );
+		$list         = implode( ',', $ids );
+
+		// Note meta is where gateway responses sit: arbitrary serialized
+		// payloads with no field to rewrite, so they are dropped rather than
+		// labelled. Allow-list, never deny-list — an unrecognised meta key is
+		// assumed to carry data. `is_customer_note` is the 0/1 flag
+		// WooCommerce reads to tell a staff note from one sent to the
+		// customer; without it every note renders as internal.
+		$wpdb->query(
+			"DELETE FROM {$wpdb->commentmeta}
+			 WHERE comment_id IN ({$list}) AND meta_key <> 'is_customer_note'"
+		);
+
+		$this->changed['order_notes'] = ( $this->changed['order_notes'] ?? 0 ) + (int) $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$wpdb->comments}
+				 SET comment_content = %s,
+				     comment_author = %s,
+				     comment_author_email = '',
+				     comment_author_url = '',
+				     comment_author_IP = ''
+				 WHERE comment_ID IN ({$list})",
+				self::REDACTED,
+				self::REDACTED
+			)
+		);
+
+		clean_comment_cache( $ids );
+
+		return count( $ids ) < $this->chunk;
+	}
+
+	/**
 	 * Comments stage: product reviews and blog comments carry commenter
-	 * PII. Order notes are skipped (owner decision, section 2.4 of the
-	 * spec).
+	 * PII. Order notes are not handled here — the order_notes stage has
+	 * already deleted them.
 	 *
 	 * @return bool Stage finished.
 	 */
@@ -1041,6 +1198,8 @@ final class AnonymizeOperation implements DestructiveOperation {
 			$wpdb->users,
 			$wpdb->usermeta,
 			$wpdb->comments,
+			$wpdb->commentmeta,
+			$wpdb->posts,
 			$wpdb->postmeta,
 			$wpdb->prefix . 'wc_orders',
 			$wpdb->prefix . 'wc_order_addresses',

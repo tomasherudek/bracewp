@@ -46,7 +46,7 @@ final class FakeModule implements Module {
 	/**
 	 * Contexts.
 	 *
-	 * @return list<Context>
+	 * @return list<string> Context constants.
 	 */
 	public function contexts(): array {
 		return [ Context::Admin ];

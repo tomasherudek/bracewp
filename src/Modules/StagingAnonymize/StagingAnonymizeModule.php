@@ -77,7 +77,7 @@ final class StagingAnonymizeModule implements Module {
 	 * The mail block must load everywhere: cron and frontend requests
 	 * send mail too.
 	 *
-	 * @return list<Context>
+	 * @return list<string> Context constants.
 	 */
 	public function contexts(): array {
 		return [ Context::Admin, Context::Frontend, Context::Cli, Context::Cron ];
@@ -276,7 +276,7 @@ final class StagingAnonymizeModule implements Module {
 		$state['owner']   = get_current_user_id();
 		$state['touched'] = time();
 
-		Plugin::instance()?->settings()->set( self::SLUG, self::RUN_STATE, $state );
+		$this->writeSetting( self::RUN_STATE, $state );
 	}
 
 	/**
@@ -285,7 +285,7 @@ final class StagingAnonymizeModule implements Module {
 	 * @return void
 	 */
 	private function clearRunState(): void {
-		Plugin::instance()?->settings()->set( self::SLUG, self::RUN_STATE, [] );
+		$this->writeSetting( self::RUN_STATE, [] );
 	}
 
 	/**
@@ -369,7 +369,7 @@ final class StagingAnonymizeModule implements Module {
 	 * @return void
 	 */
 	public function setMailBlocked( bool $blocked ): void {
-		Plugin::instance()?->settings()->set( self::SLUG, 'mail_blocked', $blocked );
+		$this->writeSetting( 'mail_blocked', $blocked );
 	}
 
 	/**
@@ -380,7 +380,7 @@ final class StagingAnonymizeModule implements Module {
 	 */
 	public function storeLastRun( array $report ): void {
 		$report['time'] = time();
-		Plugin::instance()?->settings()->set( self::SLUG, 'last_run', $report );
+		$this->writeSetting( 'last_run', $report );
 	}
 
 	/**
@@ -406,10 +406,12 @@ final class StagingAnonymizeModule implements Module {
 
 		check_admin_referer( self::SAVE_ACTION );
 
-		$settings = Plugin::instance()?->settings();
-		if ( null === $settings ) {
+		$plugin = Plugin::instance();
+		if ( null === $plugin ) {
 			return;
 		}
+
+		$settings = $plugin->settings();
 
 		$mailbox = isset( $_POST['brace_sa_mailbox'] ) ? sanitize_email( wp_unslash( $_POST['brace_sa_mailbox'] ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslashSanitize -- sanitize_email sanitizes.
 		$settings->set( self::SLUG, 'mailbox', $mailbox );
@@ -572,5 +574,26 @@ wp brace staging-anonymize purge-backup   <?php echo esc_html__( '# after verify
 		}
 
 		return $plugin->settings()->get( self::SLUG, $key, $default_value );
+	}
+
+	/**
+	 * Write one of this module's settings, if the plugin is booted.
+	 *
+	 * The counterpart to setting(). A missing Plugin instance means the
+	 * write is dropped, which matches how setting() falls back to its
+	 * default: neither side pretends the store exists when it does not.
+	 *
+	 * @param string $key   Setting key.
+	 * @param mixed  $value Value to store.
+	 * @return void
+	 */
+	private function writeSetting( string $key, $value ): void {
+		$plugin = Plugin::instance();
+
+		if ( null === $plugin ) {
+			return;
+		}
+
+		$plugin->settings()->set( self::SLUG, $key, $value );
 	}
 }

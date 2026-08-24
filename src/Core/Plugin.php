@@ -156,9 +156,9 @@ final class Plugin {
 	 * Effective state of a module for the admin and WP-CLI surfaces.
 	 *
 	 * @param Module $module Module instance.
-	 * @return ModuleState
+	 * @return string One of the ModuleState constants.
 	 */
-	public function stateOf( Module $module ): ModuleState {
+	public function stateOf( Module $module ): string {
 		if ( ! $module->requirements()->satisfied() ) {
 			return ModuleState::Unavailable;
 		}
@@ -169,9 +169,9 @@ final class Plugin {
 	/**
 	 * The context of the current request.
 	 *
-	 * @return Context
+	 * @return string One of the Context constants.
 	 */
-	public function currentContext(): Context {
+	public function currentContext(): string {
 		if ( defined( 'WP_CLI' ) && constant( 'WP_CLI' ) ) {
 			return Context::Cli;
 		}

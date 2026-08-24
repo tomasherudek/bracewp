@@ -15,7 +15,7 @@ Homepage: https://github.com/tomasherudek/bracewp
 
 ## Requirements
 
-* PHP 8.1 or newer (the bootstrap degrades gracefully below that: admin notice, no fatal)
+* PHP 7.4 or newer (the bootstrap degrades gracefully below that: admin notice, no fatal)
 * WordPress 6.7 or newer
 
 ## Development

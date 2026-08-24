@@ -285,20 +285,7 @@ final class AnonymizeOperation implements DestructiveOperation {
 	 */
 	public function execute( Batch $batch ): void {
 		while ( ! $this->finished() && ! $batch->shouldStop() ) {
-			// Explicit dispatch, not a computed method name: a typo in
-			// STAGES must be a static error, not a fatal mid-run.
-			$done = match ( self::STAGES[ $this->stageIndex ] ) {
-				'coupons'         => $this->stageCoupons(),
-				'users'           => $this->stageUsers(),
-				'orders_hpos'     => $this->stageOrdersHpos(),
-				'orders_legacy'   => $this->stageOrdersLegacy(),
-				'customer_lookup' => $this->stageCustomerLookup(),
-				'downloads'       => $this->stageDownloads(),
-				'comments'        => $this->stageComments(),
-				'sessions'        => $this->stageSessions(),
-				'tokens'          => $this->stageTokens(),
-				'webhooks'        => $this->stageWebhooks(),
-			};
+			$done = $this->runStage( self::STAGES[ $this->stageIndex ] );
 
 			if ( $done ) {
 				++$this->stageIndex;
@@ -306,6 +293,47 @@ final class AnonymizeOperation implements DestructiveOperation {
 				$this->stagePrepared = false;
 			}
 		}
+	}
+
+	/**
+	 * Run one named stage.
+	 *
+	 * Explicit dispatch, not a computed method name: a stage name that does
+	 * not exist has to blow up here, where the run stops and the state is
+	 * still consistent. A computed $this->{"stage$name"}() would turn a typo
+	 * in STAGES into a fatal halfway through a table rewrite.
+	 *
+	 * @param string $stage Stage name from STAGES.
+	 * @return bool Whether the stage finished.
+	 * @throws \InvalidArgumentException When the stage name is unknown.
+	 */
+	private function runStage( string $stage ): bool {
+		switch ( $stage ) {
+			case 'coupons':
+				return $this->stageCoupons();
+			case 'users':
+				return $this->stageUsers();
+			case 'orders_hpos':
+				return $this->stageOrdersHpos();
+			case 'orders_legacy':
+				return $this->stageOrdersLegacy();
+			case 'customer_lookup':
+				return $this->stageCustomerLookup();
+			case 'downloads':
+				return $this->stageDownloads();
+			case 'comments':
+				return $this->stageComments();
+			case 'sessions':
+				return $this->stageSessions();
+			case 'tokens':
+				return $this->stageTokens();
+			case 'webhooks':
+				return $this->stageWebhooks();
+		}
+
+		throw new \InvalidArgumentException(
+			sprintf( 'Unknown anonymization stage "%s".', esc_html( $stage ) )
+		);
 	}
 
 	/**
@@ -1070,15 +1098,22 @@ final class AnonymizeOperation implements DestructiveOperation {
 	 * @return string
 	 */
 	private function identityValue( string $kind, int $id ): string {
-		return match ( $kind ) {
-			'first'  => $this->identity->firstName( $id ),
-			'last'   => $this->identity->lastName( $id ),
-			'name'   => $this->identity->fullName( $id ),
-			'street' => $this->identity->street( $id ),
-			'phone'  => $this->identity->phone( $id ),
-			'email'  => $this->identity->email( 'userid', $id ),
-			default  => '',
-		};
+		switch ( $kind ) {
+			case 'first':
+				return $this->identity->firstName( $id );
+			case 'last':
+				return $this->identity->lastName( $id );
+			case 'name':
+				return $this->identity->fullName( $id );
+			case 'street':
+				return $this->identity->street( $id );
+			case 'phone':
+				return $this->identity->phone( $id );
+			case 'email':
+				return $this->identity->email( 'userid', $id );
+			default:
+				return '';
+		}
 	}
 
 	/**
@@ -1090,6 +1125,10 @@ final class AnonymizeOperation implements DestructiveOperation {
 	 * @return string
 	 */
 	private function legacyMetaValue( string $meta_key, string $entity, int $key ): string {
+		// str_ends_with() is PHP 8.0, and this plugin runs on 7.4. It is safe
+		// here because WordPress polyfills it in wp-includes/compat.php from
+		// 5.9 onward and the plugin requires 6.7+. Do not copy this into code
+		// that can run before WordPress loads.
 		if ( str_ends_with( $meta_key, 'first_name' ) ) {
 			return $this->identity->firstName( $key );
 		}

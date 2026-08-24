@@ -140,7 +140,7 @@ Anything reading this module's report must not claim "all PII removed." The hone
 
 ## 4. Requirements
 
-- Plugin baseline (PHP 8.1, WP 6.7). **Nothing else** — `Requirements::none()`.
+- Plugin baseline (PHP 7.4, WP 6.7). **Nothing else** — `Requirements::none()`.
 - Staging verdict from `Brace\Services\Environment` (section 2.3). Not a soft requirement: `run` refuses on a production verdict, with no override flag.
 
 **WooCommerce is not a requirement, and an earlier draft was wrong to make it one.** The reasoning then was "it anonymizes customers and orders, and there are none without WooCommerce" — which quietly assumes a WP user only matters as a shop customer. A membership site, a client portal, or a blog with open registration has real people in `wp_users` and no shop anywhere. Gating on WooCommerce meant those copies got no protection at all, which is the wrong failure direction for a module whose whole purpose is to stop PII leaving production. Shop coverage is now additive and table-detected (section 2), so the requirement bought nothing that detection does not already handle.

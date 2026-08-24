@@ -98,7 +98,7 @@ It does change runtime behaviour, which is why sections 2.3 and 2.4 carry the we
 
 ## 4. Requirements
 
-None beyond the plugin baseline (PHP 8.1, WP 6.7). `hash()` and `idn_to_ascii()` are the only functions worth naming; `hash()` is always present, and if `intl` is missing the module falls back to comparing raw hosts.
+None beyond the plugin baseline (PHP 7.4, WP 6.7). `hash()` and `idn_to_ascii()` are the only functions worth naming; `hash()` is always present, and if `intl` is missing the module falls back to comparing raw hosts.
 
 Graceful degradation message when `intl` is unavailable: *"Internationalized domain names cannot be normalized on this server (the intl extension is missing). Staging detection still works for standard domains."*
 

@@ -3,6 +3,9 @@ includes:
 
 parameters:
 	level: 6
+	# Analyse as the oldest PHP the plugin claims to support, so 8.x-only
+	# syntax and functions are reported here rather than on a client server.
+	phpVersion: 70400
 	bootstrapFiles:
 		- tests/phpstan-bootstrap.php
 	paths:

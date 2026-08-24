@@ -40,7 +40,7 @@ interface Module {
 	/**
 	 * Where it needs to load; core skips the rest.
 	 *
-	 * @return list<Context>
+	 * @return list<string> Context constants.
 	 */
 	public function contexts(): array;
 

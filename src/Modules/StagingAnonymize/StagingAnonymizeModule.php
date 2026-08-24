@@ -70,7 +70,7 @@ final class StagingAnonymizeModule implements Module {
 	 * @return string
 	 */
 	public function description(): string {
-		return __( 'Rewrites every user on a staging copy into a deterministic fake, traceable back to production by id — plus WooCommerce customers and orders when the shop data is there. Refuses to run outside a confirmed staging environment.', 'brace' );
+		return __( 'Rewrites every user on a staging copy into a deterministic fake, traceable back to production by id — plus WooCommerce customers and orders when the shop data is there. On a copy that still reads as production it warns loudly and only runs once the hostname is typed out.', 'brace' );
 	}
 
 	/**
@@ -134,18 +134,20 @@ final class StagingAnonymizeModule implements Module {
 			'brace-staging-anonymize',
 			'braceStagingAnonymize',
 			[
-				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-				'action'  => self::TICK_ACTION,
-				'nonce'   => wp_create_nonce( self::TICK_ACTION ),
-				'i18n'    => [
-					'confirm'   => __( 'This rewrites every user and order on this site. It cannot be undone without a backup or a fresh clone. Continue?', 'brace' ),
-					'backingUp' => __( 'Backing up affected tables...', 'brace' ),
+				'ajaxUrl'           => admin_url( 'admin-ajax.php' ),
+				'action'            => self::TICK_ACTION,
+				'nonce'             => wp_create_nonce( self::TICK_ACTION ),
+				'readsAsProduction' => ! ( new Environment() )->isStaging(),
+				'i18n'              => [
+					'confirm'           => __( 'This rewrites every user and order on this site. It cannot be undone without a backup or a fresh clone. Continue?', 'brace' ),
+					'confirmProduction' => __( 'WARNING: this site reads as PRODUCTION. If it really is the live site, this destroys real customer data. Continue only if you are certain this is a disposable copy. Rewrite every user and order on this site?', 'brace' ),
+					'backingUp'         => __( 'Backing up affected tables...', 'brace' ),
 					/* translators: %s: name of the stage currently running. */
-					'stage'     => __( 'Working: %s', 'brace' ),
-					'done'      => __( 'Anonymization complete. Outgoing email is now blocked on this copy.', 'brace' ),
+					'stage'             => __( 'Working: %s', 'brace' ),
+					'done'              => __( 'Anonymization complete. Outgoing email is now blocked on this copy.', 'brace' ),
 					/* translators: %s: reason the run stopped. */
-					'failed'    => __( 'Run failed: %s', 'brace' ),
-					'network'   => __( 'The request failed. The run is paused, not rolled back — reload and start again to resume.', 'brace' ),
+					'failed'            => __( 'Run failed: %s', 'brace' ),
+					'network'           => __( 'The request failed. The run is paused, not rolled back — reload and start again to resume.', 'brace' ),
 				],
 			]
 		);
@@ -157,7 +159,11 @@ final class StagingAnonymizeModule implements Module {
 	 * Every guard the CLI applies is re-applied here on every single tick,
 	 * not just when the run starts: a request that arrives after someone
 	 * has pointed this site back at production must not be allowed to
-	 * continue a run that was legitimate when it began.
+	 * continue a run that was legitimate when it began. A production
+	 * verdict alone no longer blocks the tick — hosts like WP Engine's
+	 * staging URLs are indistinguishable from production — but the typed
+	 * hostname must match on every tick, so a repoint mid-run still stops
+	 * the run: the host changes and the confirmation stops matching.
 	 *
 	 * @return void
 	 */
@@ -169,11 +175,6 @@ final class StagingAnonymizeModule implements Module {
 		check_ajax_referer( self::TICK_ACTION );
 
 		$environment = new Environment();
-
-		if ( ! $environment->isStaging() ) {
-			$this->clearRunState();
-			wp_send_json_error( [ 'message' => __( 'This site reads as production. Anonymization refuses to run.', 'brace' ) ], 400 );
-		}
 
 		$given = strtolower( trim( (string) ( $_POST['confirm_host'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- compared verbatim against home_url()'s host, never stored or echoed.
 		$given = 0 === strpos( $given, 'www.' ) ? substr( $given, 4 ) : $given;
@@ -445,8 +446,8 @@ final class StagingAnonymizeModule implements Module {
 		$last        = $this->lastRun();
 		?>
 		<?php if ( null === $reason ) : ?>
-			<div class="notice notice-error inline"><p>
-				<?php esc_html_e( 'This site reads as PRODUCTION. Anonymization will refuse to run here. On a staging copy, set WP_ENVIRONMENT_TYPE to "staging" (or define BRACE_ENVIRONMENT as "staging") in wp-config.php.', 'brace' ); ?>
+			<div class="notice notice-warning inline"><p>
+				<?php esc_html_e( 'This site reads as PRODUCTION — no staging signal found. Be careful: if this really is the live site, anonymization would destroy real customer data. If it is a copy on a host that only looks public (WP Engine and similar staging URLs do), you can still run it below by typing this site\'s hostname. Better yet, set WP_ENVIRONMENT_TYPE to "staging" (or define BRACE_ENVIRONMENT as "staging") in wp-config.php and the warning goes away.', 'brace' ); ?>
 			</p></div>
 		<?php else : ?>
 			<div class="notice notice-info inline"><p>
@@ -465,7 +466,7 @@ final class StagingAnonymizeModule implements Module {
 				<?php
 				printf(
 					/* translators: %s: date and time of the last anonymization run. */
-					esc_html__( 'Customer data on this copy was anonymized on %s. Kept on purpose: order notes and wc-logs files.', 'brace' ),
+					esc_html__( 'Customer data on this copy was anonymized on %s. Kept on purpose: wc-logs files.', 'brace' ),
 					esc_html( wp_date( (string) get_option( 'date_format' ) . ' ' . (string) get_option( 'time_format' ), (int) $last['time'] ) )
 				);
 				?>
@@ -509,45 +510,46 @@ final class StagingAnonymizeModule implements Module {
 		<h2><?php esc_html_e( 'Run it from here', 'brace' ); ?></h2>
 
 		<?php if ( null === $reason ) : ?>
-			<p><?php esc_html_e( 'Not available: this site does not identify itself as staging. The run button appears once it does.', 'brace' ); ?></p>
-		<?php else : ?>
-			<?php $operation = new AnonymizeOperation( new FakeIdentity( $this->mailbox() ), $this->excludedRoles() ); ?>
-			<p>
-				<?php
-				echo esc_html(
-					$operation->wooDetected()
-						? __( 'In scope on this site: WordPress users and WooCommerce customers and orders.', 'brace' )
-						: __( 'In scope on this site: WordPress users only — no WooCommerce data found.', 'brace' )
-				);
-				?>
-			</p>
-
-			<div id="brace-sa-runner">
-				<p>
-					<label>
-						<input type="checkbox" id="brace-sa-backup" checked />
-						<?php esc_html_e( 'Back up the affected tables first', 'brace' ); ?>
-					</label>
-					<span class="description"><?php esc_html_e( 'The backup contains the very data being removed. Purge it once you have verified this copy.', 'brace' ); ?></span>
-				</p>
-				<p>
-					<label for="brace-sa-host">
-						<?php
-						printf(
-							/* translators: %s: the site's own hostname. */
-							esc_html__( 'Type %s to confirm:', 'brace' ),
-							'<code>' . esc_html( $environment->host() ) . '</code>'
-						);
-						?>
-					</label><br />
-					<input type="text" id="brace-sa-host" class="regular-text" autocomplete="off" placeholder="<?php echo esc_attr( $environment->host() ); ?>" />
-				</p>
-				<p>
-					<button type="button" class="button button-primary" id="brace-sa-run"><?php esc_html_e( 'Anonymize this copy', 'brace' ); ?></button>
-				</p>
-				<div id="brace-sa-progress" hidden></div>
-			</div>
+			<p><strong><?php esc_html_e( 'This copy reads as production.', 'brace' ); ?></strong>
+			<?php esc_html_e( 'Typing the hostname below overrides that warning — make sure you are on a disposable copy before you do.', 'brace' ); ?></p>
 		<?php endif; ?>
+
+		<?php $operation = new AnonymizeOperation( new FakeIdentity( $this->mailbox() ), $this->excludedRoles() ); ?>
+		<p>
+			<?php
+			echo esc_html(
+				$operation->wooDetected()
+					? __( 'In scope on this site: WordPress users and WooCommerce customers and orders.', 'brace' )
+					: __( 'In scope on this site: WordPress users only — no WooCommerce data found.', 'brace' )
+			);
+			?>
+		</p>
+
+		<div id="brace-sa-runner">
+			<p>
+				<label>
+					<input type="checkbox" id="brace-sa-backup" checked />
+					<?php esc_html_e( 'Back up the affected tables first', 'brace' ); ?>
+				</label>
+				<span class="description"><?php esc_html_e( 'The backup contains the very data being removed. Purge it once you have verified this copy.', 'brace' ); ?></span>
+			</p>
+			<p>
+				<label for="brace-sa-host">
+					<?php
+					printf(
+						/* translators: %s: the site's own hostname. */
+						esc_html__( 'Type %s to confirm:', 'brace' ),
+						'<code>' . esc_html( $environment->host() ) . '</code>'
+					);
+					?>
+				</label><br />
+				<input type="text" id="brace-sa-host" class="regular-text" autocomplete="off" placeholder="<?php echo esc_attr( $environment->host() ); ?>" />
+			</p>
+			<p>
+				<button type="button" class="button button-primary" id="brace-sa-run"><?php esc_html_e( 'Anonymize this copy', 'brace' ); ?></button>
+			</p>
+			<div id="brace-sa-progress" hidden></div>
+		</div>
 
 		<h2><?php esc_html_e( 'Or over WP-CLI', 'brace' ); ?></h2>
 		<p><?php esc_html_e( 'Same operation, same guards. Use this to make anonymization the last step of your staging sync script, instead of something someone remembers to click:', 'brace' ); ?></p>

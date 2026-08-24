@@ -118,7 +118,12 @@
 	}
 
 	button.addEventListener( 'click', function () {
-		if ( ! window.confirm( config.i18n.confirm ) ) {
+		var confirmText =
+			config.readsAsProduction && config.i18n.confirmProduction
+				? config.i18n.confirmProduction
+				: config.i18n.confirm;
+
+		if ( ! window.confirm( confirmText ) ) {
 			return;
 		}
 

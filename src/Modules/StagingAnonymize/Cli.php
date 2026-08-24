@@ -96,7 +96,7 @@ final class Cli {
 		}
 
 		if ( null === $reason ) {
-			\WP_CLI::error( 'This site reads as production. Anonymization will refuse to run.' );
+			\WP_CLI::error( 'This site reads as production. A run will warn and demand --confirm-host plus explicit confirmation.' );
 		}
 	}
 
@@ -160,8 +160,14 @@ final class Cli {
 	 * --confirm-host=<host>
 	 * : The host of this site, typed out. Refuses when it does not match.
 	 *
-	 * [--no-backup]
-	 * : Skip the pre-run backup. Use when your undo path is re-cloning production.
+	 * [--yes]
+	 * : Answer yes to the extra confirmation asked on a production verdict.
+	 *
+	 * [--backup]
+	 * : On by default. Pass --no-backup to skip the pre-run dump, e.g. when your
+	 * undo path is re-cloning production. Declared in the positive because WP-CLI
+	 * parses --no-x into x=false before it validates the synopsis, so a literal
+	 * [--no-backup] token here would reject the very flag it documents.
 	 *
 	 * [--batch-size=<rows>]
 	 * : Rows processed per chunk. Default: 200.
@@ -174,9 +180,10 @@ final class Cli {
 		$reason = $this->environment->stagingReason();
 
 		if ( null === $reason ) {
-			\WP_CLI::error(
-				'This site reads as production. Anonymization refuses to run. If this really is a copy, set WP_ENVIRONMENT_TYPE or define BRACE_ENVIRONMENT as "staging" in wp-config.php.'
+			\WP_CLI::warning(
+				'This site reads as PRODUCTION — no staging signal found. If this really is the live site, this run destroys real customer data. On a copy, setting WP_ENVIRONMENT_TYPE or BRACE_ENVIRONMENT to "staging" in wp-config.php silences this warning.'
 			);
+			\WP_CLI::confirm( 'Are you certain this is a disposable copy?', $assoc_args );
 		}
 
 		$expected = $this->environment->host();
@@ -187,11 +194,11 @@ final class Cli {
 			\WP_CLI::error( sprintf( 'Host confirmation failed. Re-run with --confirm-host=%s', $expected ) );
 		}
 
-		\WP_CLI::log( 'Staging confirmed (' . $reason . ').' );
+		\WP_CLI::log( null === $reason ? 'Proceeding on typed host confirmation — this copy reads as production.' : 'Staging confirmed (' . $reason . ').' );
 
 		$operation = $this->operation( isset( $assoc_args['batch-size'] ) ? (int) $assoc_args['batch-size'] : AnonymizeOperation::DEFAULT_CHUNK );
 
-		if ( ! isset( $assoc_args['no-backup'] ) ) {
+		if ( false !== ( $assoc_args['backup'] ?? true ) ) {
 			\WP_CLI::log( 'Backing up affected tables...' );
 			$backup_id = $operation->backup();
 			\WP_CLI::log( 'Backup: ' . $backup_id );
@@ -217,7 +224,7 @@ final class Cli {
 		}
 
 		\WP_CLI::log( 'Outgoing email is now blocked on this copy.' );
-		\WP_CLI::warning( 'Kept on purpose: order notes (all of them) and wc-logs files in uploads. Both can still contain personal data.' );
+		\WP_CLI::warning( 'Kept on purpose: wc-logs files in uploads. They can still contain personal data.' );
 		\WP_CLI::success( 'Anonymization complete.' );
 	}
 

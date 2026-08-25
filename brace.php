@@ -5,7 +5,7 @@
  * Description: Braces your WordPress. A modular toolbox where every module is off by default. No nags, no tracking, clean uninstall.
  * Version: 0.1.0
  * Requires at least: 6.7
- * Requires PHP: 8.1
+ * Requires PHP: 7.4
  * Author: Tom Herudek
  * Author URI: https://tomherudek.com/
  * License: GPLv2 or later
@@ -25,7 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'BRACE_VERSION', '0.1.0' );
-define( 'BRACE_MIN_PHP', '8.1' );
+define( 'BRACE_MIN_PHP', '7.4' );
 define( 'BRACE_MIN_WP', '6.7' );
 define( 'BRACE_FILE', __FILE__ );
 define( 'BRACE_DIR', plugin_dir_path( __FILE__ ) );

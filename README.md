@@ -15,7 +15,7 @@ Homepage: https://github.com/tomasherudek/bracewp
 
 ## Requirements
 
-* PHP 8.1 or newer (the bootstrap degrades gracefully below that: admin notice, no fatal)
+* PHP 7.4 or newer (the bootstrap degrades gracefully below that: admin notice, no fatal)
 * WordPress 6.7 or newer
 
 ## Development
@@ -31,4 +31,8 @@ The repo layout, safety layers, and module contract are documented in the archit
 
 ## Status
 
-0.1.0 is the core framework with an empty module set: module registry, requirements checks, fatal containment, admin page, WP-CLI commands, clean uninstall. The first modules are being specced in `docs/modules/`.
+0.1.0 is the core framework — module registry, requirements checks, fatal containment, admin page, WP-CLI commands, clean uninstall — plus the first shipped module:
+
+- **[003 Staging Anonymize](docs/modules/003-staging-anonymize.md)** — rewrites every WooCommerce customer and order on a staging copy into deterministic fakes derived from the production ids, so a clone can be worked on (or handed to an AI) without carrying customer data. Refuses to run unless the copy identifies itself as staging. CLI-first: `wp brace staging-anonymize dry-run`.
+
+Its coverage is unit-only so far; the integration suite that would prove the HPOS storage matrix needs the wp-env harness that does not exist yet (see the module spec, section 7). The remaining modules are being specced in `docs/modules/`.

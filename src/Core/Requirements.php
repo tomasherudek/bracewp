@@ -17,7 +17,7 @@ final class Requirements {
 	/**
 	 * Declared requirements.
 	 *
-	 * @var list<array{type: RequirementType, value: string|int}>
+	 * @var list<array{type: string, value: string|int}>
 	 */
 	private array $requirements = [];
 
@@ -90,6 +90,15 @@ final class Requirements {
 	}
 
 	/**
+	 * Require an active WooCommerce plugin.
+	 *
+	 * @return self
+	 */
+	public function wooCommerce(): self {
+		return $this->add( RequirementType::WooCommerce, 'woocommerce' );
+	}
+
+	/**
 	 * Whether every declared requirement is met right now.
 	 *
 	 * @return bool
@@ -131,22 +140,26 @@ final class Requirements {
 
 		$number = (int) $value;
 
-		return match ( strtoupper( substr( $value, -1 ) ) ) {
-			'G'     => $number * 1024 * 1024 * 1024,
-			'M'     => $number * 1024 * 1024,
-			'K'     => $number * 1024,
-			default => $number,
-		};
+		switch ( strtoupper( substr( $value, -1 ) ) ) {
+			case 'G':
+				return $number * 1024 * 1024 * 1024;
+			case 'M':
+				return $number * 1024 * 1024;
+			case 'K':
+				return $number * 1024;
+			default:
+				return $number;
+		}
 	}
 
 	/**
 	 * Store one requirement.
 	 *
-	 * @param RequirementType $type  What kind of requirement.
-	 * @param string|int      $value The required value.
+	 * @param string     $type  What kind of requirement; a RequirementType constant.
+	 * @param string|int $value The required value.
 	 * @return self
 	 */
-	private function add( RequirementType $type, $value ): self {
+	private function add( string $type, $value ): self {
 		$this->requirements[] = [
 			'type'  => $type,
 			'value' => $value,
@@ -158,39 +171,56 @@ final class Requirements {
 	/**
 	 * Check a single requirement.
 	 *
-	 * @param RequirementType $type  What kind of requirement.
-	 * @param string|int      $value The required value.
+	 * @param string     $type  What kind of requirement; a RequirementType constant.
+	 * @param string|int $value The required value.
 	 * @return ?string Human sentence when unmet, null when met.
+	 * @throws \InvalidArgumentException When the requirement kind is unknown.
 	 */
-	private function check( RequirementType $type, $value ): ?string {
-		return match ( $type ) {
-			RequirementType::PhpExtension => extension_loaded( (string) $value ) ? null : sprintf(
-				/* translators: %s: PHP extension name. */
-				__( 'Your server does not support this module (missing PHP extension %s).', 'brace' ),
-				(string) $value
-			),
-			RequirementType::WpVersion => version_compare( get_bloginfo( 'version' ), (string) $value, '>=' ) ? null : sprintf(
-				/* translators: %s: required WordPress version. */
-				__( 'This module needs WordPress %s or newer.', 'brace' ),
-				(string) $value
-			),
-			RequirementType::WritablePath => wp_is_writable( (string) $value ) ? null : sprintf(
-				/* translators: %s: filesystem path. */
-				__( 'Your server does not support this module (path %s is not writable).', 'brace' ),
-				(string) $value
-			),
-			RequirementType::Memory => $this->memorySatisfied( (int) $value ) ? null : sprintf(
-				/* translators: %s: required memory amount in megabytes. */
-				__( 'Your server does not support this module (PHP memory limit below %s MB).', 'brace' ),
-				(string) round( ( (int) $value ) / ( 1024 * 1024 ) )
-			),
-			RequirementType::Binary => self::binaryExists( (string) $value ) ? null : sprintf(
-				/* translators: %s: command line binary name. */
-				__( 'Your server does not support this module (missing binary %s).', 'brace' ),
-				(string) $value
-			),
-			RequirementType::Multisite => is_multisite() ? null : __( 'This module only works on a multisite installation.', 'brace' ),
-		};
+	private function check( string $type, $value ): ?string {
+		switch ( $type ) {
+			case RequirementType::PhpExtension:
+				return extension_loaded( (string) $value ) ? null : sprintf(
+					/* translators: %s: PHP extension name. */
+					__( 'Your server does not support this module (missing PHP extension %s).', 'brace' ),
+					(string) $value
+				);
+			case RequirementType::WpVersion:
+				return version_compare( get_bloginfo( 'version' ), (string) $value, '>=' ) ? null : sprintf(
+					/* translators: %s: required WordPress version. */
+					__( 'This module needs WordPress %s or newer.', 'brace' ),
+					(string) $value
+				);
+			case RequirementType::WritablePath:
+				return wp_is_writable( (string) $value ) ? null : sprintf(
+					/* translators: %s: filesystem path. */
+					__( 'Your server does not support this module (path %s is not writable).', 'brace' ),
+					(string) $value
+				);
+			case RequirementType::Memory:
+				return $this->memorySatisfied( (int) $value ) ? null : sprintf(
+					/* translators: %s: required memory amount in megabytes. */
+					__( 'Your server does not support this module (PHP memory limit below %s MB).', 'brace' ),
+					(string) round( ( (int) $value ) / ( 1024 * 1024 ) )
+				);
+			case RequirementType::Binary:
+				return self::binaryExists( (string) $value ) ? null : sprintf(
+					/* translators: %s: command line binary name. */
+					__( 'Your server does not support this module (missing binary %s).', 'brace' ),
+					(string) $value
+				);
+			case RequirementType::Multisite:
+				return is_multisite() ? null : __( 'This module only works on a multisite installation.', 'brace' );
+			case RequirementType::WooCommerce:
+				return class_exists( 'WooCommerce' ) ? null : __( 'This module needs WooCommerce installed and active.', 'brace' );
+		}
+
+		// The enum this replaced made an unknown kind impossible; a switch
+		// would happily fall through and report the requirement as met,
+		// which silently grants a module a capability nobody checked. Fail
+		// loudly instead, matching the UnhandledMatchError it used to throw.
+		throw new \InvalidArgumentException(
+			sprintf( 'Unknown requirement type "%s".', esc_html( $type ) )
+		);
 	}
 
 	/**

@@ -64,7 +64,7 @@ final class Cli {
 			$rows[] = [
 				'slug'  => $slug,
 				'title' => $module->title(),
-				'state' => $this->plugin->stateOf( $module )->value,
+				'state' => $this->plugin->stateOf( $module ),
 			];
 		}
 

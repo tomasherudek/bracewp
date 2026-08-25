@@ -29,6 +29,20 @@
 		<exclude name="Squiz.Commenting.FunctionComment.InvalidNoReturn"/>
 	</rule>
 
+	<!--
+		Context, ModuleState and RequirementType were backed enums before the
+		plugin dropped to PHP 7.4. Their constants keep the PascalCase case
+		names so every call site still reads Context::Admin, and so the files
+		can turn back into enums untouched if the minimum ever rises again.
+		Scoped to those three files on purpose: real constants elsewhere are
+		still held to UPPER_CASE.
+	-->
+	<rule ref="Generic.NamingConventions.UpperCaseConstantName.ClassConstantNotUpperCase">
+		<exclude-pattern>src/Core/Context\.php$</exclude-pattern>
+		<exclude-pattern>src/Core/ModuleState\.php$</exclude-pattern>
+		<exclude-pattern>src/Core/RequirementType\.php$</exclude-pattern>
+	</rule>
+
 	<rule ref="WordPress.WP.I18n">
 		<properties>
 			<property name="text_domain" type="array">

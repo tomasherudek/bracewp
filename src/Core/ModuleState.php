@@ -12,9 +12,19 @@ namespace Brace\Core;
  *
  * Unavailable means the server does not meet the module's requirements,
  * so the toggle is disabled with a human explanation.
+ *
+ * A backed enum until the plugin dropped to PHP 7.4; see RequirementType
+ * for why the shape is what it is.
  */
-enum ModuleState: string {
-	case Enabled     = 'enabled';
-	case Disabled    = 'disabled';
-	case Unavailable = 'unavailable';
+final class ModuleState {
+
+	const Enabled     = 'enabled';
+	const Disabled    = 'disabled';
+	const Unavailable = 'unavailable';
+
+	/**
+	 * Not instantiable: this is a namespace for constants, as the enum was.
+	 */
+	private function __construct() {
+	}
 }
